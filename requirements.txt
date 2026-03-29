@@ -8,3 +8,4 @@ loguru
 requests
 ImageHash
 sentencepiece
+protobuf
