@@ -7,3 +7,4 @@ Pillow
 loguru
 requests
 ImageHash
+sentencepiece
