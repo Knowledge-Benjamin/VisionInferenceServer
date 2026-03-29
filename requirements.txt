@@ -7,5 +7,6 @@ Pillow
 loguru
 requests
 ImageHash
+sentencepiece
 protobuf
 curl_cffi
