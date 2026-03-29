@@ -33,7 +33,7 @@ from loguru import logger
 # Model configuration
 MODEL_NAME = "google/siglip-base-patch16-224"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-API_KEY = os.getenv("INFERENCE_API_KEY", "default-key-change-in-production")
+API_KEY = os.getenv("VISION_API_KEY", "default-key-change-in-production")
 VERSION = "1.0.0"
 
 # Global model instance
