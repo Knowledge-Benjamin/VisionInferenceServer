@@ -17,8 +17,7 @@ import os
 import io
 import asyncio
 import base64
-import requests
-import cloudscraper
+from curl_cffi import requests
 from typing import List, Optional
 from contextlib import asynccontextmanager
 
@@ -82,22 +81,16 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Global generic scraper to spoof browsers
-scraper = cloudscraper.create_scraper(
-    browser={
-        'browser': 'chrome',
-        'platform': 'windows',
-        'desktop': True
-    }
-)
-
 def _process_images(urls: List[str], b64s: List[str]) -> List[Image.Image]:
     images = []
     # Process URLs
     for url in urls:
         try:
-            resp = scraper.get(url, timeout=10)
-            resp.raise_for_status() # Catch 403 Forbidden properly
+            # impersonate="chrome110" perfectly simulates the underlying C++ WebRTC/TLS handshakes 
+            # to mathematical exactness, bypassing Cloudflare/Datadome without spinning up a 1GB headless DOM
+            resp = requests.get(url, impersonate="chrome110", timeout=15)
+            if resp.status_code != 200:
+                 raise ValueError(f"HTTP {resp.status_code}")
             img = Image.open(io.BytesIO(resp.content)).convert("RGB")
             images.append(img)
         except Exception as e:

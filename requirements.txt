@@ -8,4 +8,4 @@ loguru
 requests
 ImageHash
 protobuf
-cloudscraper
+curl_cffi
