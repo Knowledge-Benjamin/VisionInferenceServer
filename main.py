@@ -18,6 +18,7 @@ import io
 import asyncio
 import base64
 import requests
+import cloudscraper
 from typing import List, Optional
 from contextlib import asynccontextmanager
 
@@ -81,12 +82,22 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Global generic scraper to spoof browsers
+scraper = cloudscraper.create_scraper(
+    browser={
+        'browser': 'chrome',
+        'platform': 'windows',
+        'desktop': True
+    }
+)
+
 def _process_images(urls: List[str], b64s: List[str]) -> List[Image.Image]:
     images = []
     # Process URLs
     for url in urls:
         try:
-            resp = requests.get(url, timeout=5)
+            resp = scraper.get(url, timeout=10)
+            resp.raise_for_status() # Catch 403 Forbidden properly
             img = Image.open(io.BytesIO(resp.content)).convert("RGB")
             images.append(img)
         except Exception as e:
