@@ -22,9 +22,12 @@ ENV HOME=/home/user \
     TRANSFORMERS_CACHE=/home/user/.cache/huggingface/hub \
     HF_HOME=/home/user/.cache/huggingface
 
-# Pre-download the SigLIP Vision model at build time strictly AS the non-root user.
-# This prevents downloading the massive model every time Cloud Run goes cold!
-RUN python -c "from transformers import AutoProcessor, AutoModel; AutoProcessor.from_pretrained('google/siglip-base-patch16-224'); AutoModel.from_pretrained('google/siglip-base-patch16-224')"
+# Pre-download all Triple-Transformer arrays at build time strictly AS the non-root user.
+# This obliterates the 2.5GB model network delay when Cloud Run instances cold start!
+RUN python -c "from transformers import AutoProcessor, AutoModel, AutoImageProcessor, AutoModelForImageClassification; \
+AutoProcessor.from_pretrained('google/siglip-base-patch16-224'); AutoModel.from_pretrained('google/siglip-base-patch16-224'); \
+AutoImageProcessor.from_pretrained('umm-maybe/AI-image-detector'); AutoModelForImageClassification.from_pretrained('umm-maybe/AI-image-detector'); \
+AutoImageProcessor.from_pretrained('dima806/deepfake_vs_real_image_detection'); AutoModelForImageClassification.from_pretrained('dima806/deepfake_vs_real_image_detection')"
 
 WORKDIR $HOME/app
 COPY --chown=user . $HOME/app

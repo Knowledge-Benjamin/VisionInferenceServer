@@ -51,8 +51,8 @@ jobs:
             --platform managed \
             --region ${{ env.REGION }} \
             --allow-unauthenticated \
-            --memory 2Gi \
-            --cpu 1 \
+            --memory 4Gi \
+            --cpu 2 \
             --concurrency 80 \
             --max-instances 3 \
             --port 7860 \
