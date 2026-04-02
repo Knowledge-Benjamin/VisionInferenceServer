@@ -59,6 +59,7 @@ class VisionEmbedResponse(BaseModel):
     embeddings: List[List[float]] = Field(..., description="768-dimensional sequence mapped vectors.")
     phashes: Optional[List[str]] = Field(default=None, description="Perceptual hashes corresponding to the target media.")
     synthetic_prob: Optional[List[float]] = Field(default=None, description="The unified Deepfake/AI-generator confidence float [0.0 - 1.0].")
+    debug: Optional[str] = Field(default=None, description="Exception bridge.")
 
 def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if credentials.credentials != API_KEY:
@@ -218,29 +219,54 @@ def _process_media_payloads(urls: List[str], b64s: List[str]) -> List[List[Image
 
 def _calculate_synthetic_probability(images: List[Image.Image]) -> float:
     """
-    Executes the Dual-ViT model array across a temporal sequence of frames. 
-    Averages probabilities per-frame to normalize motion blur noise, then aggregates the 
+    Executes the Dual-ViT model array across a temporal sequence of frames.
+    Averages probabilities per-frame to normalize motion blur noise, then aggregates the
     maximum synthetic hit.
     """
     if not images:
+        logger.warning("_calculate_synthetic_probability called with empty images list.")
         return 0.0
 
     try:
         synth_outputs = []
         df_outputs = []
 
-        # Safe index caching (only compute once)
-        artificial_idx = 0
-        for k, v in models['synth'].config.id2label.items():
+        # Log the actual label maps so Cloud Run logs expose any label-key mismatches
+        synth_id2label = models['synth'].config.id2label
+        df_id2label = models['df'].config.id2label
+        logger.info(f"[DIAG] synth id2label: {synth_id2label}")
+        logger.info(f"[DIAG] df   id2label: {df_id2label}")
+
+        # Find the index corresponding to the AI/synthetic class
+        artificial_idx = None
+        for k, v in synth_id2label.items():
             if 'artificial' in str(v).lower() or 'fake' in str(v).lower() or 'ai' in str(v).lower():
                 artificial_idx = int(k)
                 break
-                
-        fake_idx = 0
-        for k, v in models['df'].config.id2label.items():
-            if 'fake' in str(v).lower() or 'forgery' in str(v).lower():
+        if artificial_idx is None:
+            # Fallback: pick whichever single label is NOT 'real' or 'human'
+            for k, v in synth_id2label.items():
+                if 'real' not in str(v).lower() and 'human' not in str(v).lower():
+                    artificial_idx = int(k)
+                    break
+        if artificial_idx is None:
+            artificial_idx = 1  # last-resort index
+        logger.info(f"[DIAG] artificial_idx resolved to {artificial_idx} = {synth_id2label.get(artificial_idx)}")
+
+        # Find the index corresponding to the Fake class
+        fake_idx = None
+        for k, v in df_id2label.items():
+            if 'fake' in str(v).lower() or 'forgery' in str(v).lower() or 'artificial' in str(v).lower():
                 fake_idx = int(k)
                 break
+        if fake_idx is None:
+            for k, v in df_id2label.items():
+                if 'real' not in str(v).lower() and 'human' not in str(v).lower():
+                    fake_idx = int(k)
+                    break
+        if fake_idx is None:
+            fake_idx = 1
+        logger.info(f"[DIAG] fake_idx resolved to {fake_idx} = {df_id2label.get(fake_idx)}")
 
         with torch.no_grad():
             for img in images:
@@ -249,22 +275,24 @@ def _calculate_synthetic_probability(images: List[Image.Image]) -> float:
                 synth_inputs = {k: v.to(DEVICE) for k, v in raw_synth_inputs.items()}
                 s_logits = models['synth'](**synth_inputs).logits
                 s_probs = torch.nn.functional.softmax(s_logits, dim=-1)
+                logger.info(f"[DIAG] synth full probs: {s_probs[0].tolist()}")
 
                 # 2. Evaluate Face Forgeries
                 raw_df_inputs = models['df_proc'](images=img, return_tensors="pt")
                 df_inputs = {k: v.to(DEVICE) for k, v in raw_df_inputs.items()}
                 d_logits = models['df'](**df_inputs).logits
                 d_probs = torch.nn.functional.softmax(d_logits, dim=-1)
-                
+                logger.info(f"[DIAG] df   full probs: {d_probs[0].tolist()}")
+
                 synth_outputs.append(s_probs[0][artificial_idx].item())
                 df_outputs.append(d_probs[0][fake_idx].item())
 
-        # Average across frames independently
         avg_synth = sum(synth_outputs) / len(synth_outputs)
         avg_df = sum(df_outputs) / len(df_outputs)
+        final = max(avg_synth, avg_df)
+        logger.info(f"[DIAG] avg_synth={avg_synth:.4f}  avg_df={avg_df:.4f}  final={final:.4f}")
+        return final
 
-        # Output the Maximum trigger. If the face is fake OR the background is midjourney-> 1.0
-        return max(avg_synth, avg_df)
     except Exception as e:
         import traceback
         logger.error(f"Classifier Array Panicked: {e}\n{traceback.format_exc()}")
@@ -277,15 +305,14 @@ def _embed_matrix(media_arrays: List[List[Image.Image]]) -> tuple[List[List[floa
     master_synth_probs = []
 
     try:
-        # Evaluate Media Blocks in chronological sequence
         for frame_group in media_arrays:
-            # 1. Perceptual Hash (take the middle frame to represent the video hash)
+            # 1. Perceptual Hash (middle frame)
             center_frame = frame_group[len(frame_group) // 2]
             master_phashes.append(str(imagehash.phash(center_frame)))
 
-            # 2. Synthetic Probability Convolution
+            # 2. Synthetic Probability — always a plain float now
             synth_score = _calculate_synthetic_probability(frame_group)
-            master_synth_probs.append(round(synth_score, 4))
+            master_synth_probs.append(round(float(synth_score), 4))
 
             # 3. SigLIP Mathematical Embedding Matrix
             inputs = models['siglip_proc'](images=frame_group, return_tensors="pt").to(DEVICE)
@@ -293,17 +320,16 @@ def _embed_matrix(media_arrays: List[List[Image.Image]]) -> tuple[List[List[floa
                 vision_outputs = models['siglip'].vision_model(**inputs)
                 image_embeds = vision_outputs.pooler_output
                 image_embeds = image_embeds / image_embeds.norm(dim=-1, keepdim=True)
-            
-            # Collapse vectors to a single absolute semantic trajectory via Mean Pooling
+
             avg_vector = torch.mean(image_embeds, dim=0, keepdim=True)
             avg_vector = avg_vector / avg_vector.norm(dim=-1, keepdim=True)
-            
             master_vectors.append(avg_vector[0].cpu().tolist())
-            
+
         return master_vectors, master_phashes, master_synth_probs
 
     except Exception as e:
-        logger.error(f"Matrix Algebra Panlocked: {e}")
+        import traceback
+        logger.error(f"Matrix Algebra Panicked: {e}\n{traceback.format_exc()}")
         raise ValueError("Core Tensor Computation Failed")
 
 
