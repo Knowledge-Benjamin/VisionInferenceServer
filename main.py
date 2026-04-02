@@ -66,8 +66,7 @@ def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)
         raise HTTPException(status_code=401, detail="Invalid API key")
     return credentials
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+def _load_models_sync():
     logger.info(f"Booting Neural Array on {DEVICE} memory banks...")
     try:
         # Load the Mathematical Semantic Tensor
@@ -88,7 +87,12 @@ async def lifespan(app: FastAPI):
         logger.success("Triple-Transformer Array safely active.")
     except Exception as e:
         logger.error(f"Failed to populate active weights: {e}")
-        raise
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Offload the 60-second PyTorch I/O boot sequence to a background thread 
+    # so Uvicorn can open port 7860 immediately for the Cloud Run readiness probe!
+    asyncio.create_task(asyncio.to_thread(_load_models_sync))
     yield
     logger.info("Evacuating models via shutdown signal.")
 
@@ -305,6 +309,8 @@ def _embed_matrix(media_arrays: List[List[Image.Image]]) -> tuple[List[List[floa
 
 @app.post("/embed_media", response_model=VisionEmbedResponse)
 async def embed_media(request: VisionEmbedRequest, _: str = Depends(verify_api_key)):
+    if 'siglip' not in models:
+        raise HTTPException(status_code=503, detail="Neural Array is cold-starting. Please retry in 10 seconds.")
     try:
         total = len(request.image_urls) + len(request.image_base64)
         if total == 0 or total > 16:
@@ -343,6 +349,8 @@ def _embed_text_sync(texts: List[str]) -> List[List[float]]:
 
 @app.post("/embed_text", response_model=VisionEmbedResponse)
 async def embed_text(request: VisionTextEmbedRequest, _: str = Depends(verify_api_key)):
+    if 'siglip' not in models:
+        raise HTTPException(status_code=503, detail="Neural Array is cold-starting. Please retry in 10 seconds.")
     try:
         if not request.texts:
             raise HTTPException(status_code=400, detail="Must provide texts")
