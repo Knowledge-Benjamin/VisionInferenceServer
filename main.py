@@ -307,10 +307,21 @@ def _embed_matrix(media_arrays: List[List[Image.Image]]) -> tuple[List[List[floa
         raise ValueError("Core Tensor Computation Failed")
 
 
+async def wait_for_models():
+    """Asynchronously hold the HTTP connection open while the background thread completes."""
+    for _ in range(120): # Extend wait up to 120s for slow CPU bounds
+        if 'siglip' in models and 'synth' in models:
+            return True
+        await asyncio.sleep(1.0)
+    return False
+
 @app.post("/embed_media", response_model=VisionEmbedResponse)
 async def embed_media(request: VisionEmbedRequest, _: str = Depends(verify_api_key)):
     if 'siglip' not in models:
-        raise HTTPException(status_code=503, detail="Neural Array is cold-starting. Please retry in 10 seconds.")
+        logger.info("Suspending request to wait for PyTorch array memory completion...")
+        ready = await wait_for_models()
+        if not ready:
+            raise HTTPException(status_code=503, detail="Cold-start timeout. Neural array failed to bind to RAM in 120 seconds.")
     try:
         total = len(request.image_urls) + len(request.image_base64)
         if total == 0 or total > 16:
@@ -350,7 +361,9 @@ def _embed_text_sync(texts: List[str]) -> List[List[float]]:
 @app.post("/embed_text", response_model=VisionEmbedResponse)
 async def embed_text(request: VisionTextEmbedRequest, _: str = Depends(verify_api_key)):
     if 'siglip' not in models:
-        raise HTTPException(status_code=503, detail="Neural Array is cold-starting. Please retry in 10 seconds.")
+        ready = await wait_for_models()
+        if not ready:
+            raise HTTPException(status_code=503, detail="Cold-start timeout. Neural array failed to bind to RAM in 120 seconds.")
     try:
         if not request.texts:
             raise HTTPException(status_code=400, detail="Must provide texts")
