@@ -67,7 +67,10 @@ def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)
         raise HTTPException(status_code=401, detail="Invalid API key")
     return credentials
 
+startup_error = None
+
 def _load_models_sync():
+    global startup_error
     logger.info(f"Booting Neural Array on {DEVICE} memory banks...")
     try:
         # Load the Mathematical Semantic Tensor
@@ -87,7 +90,9 @@ def _load_models_sync():
 
         logger.success("Triple-Transformer Array safely active.")
     except Exception as e:
-        logger.error(f"Failed to populate active weights: {e}")
+        import traceback
+        startup_error = traceback.format_exc()
+        logger.error(f"Failed to populate active weights: {e}\n{startup_error}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -308,6 +313,9 @@ def _embed_matrix(media_arrays: List[List[Image.Image]]) -> tuple[List[List[floa
     master_phashes = []
     master_synth_probs = []
     master_debug = None
+
+    if startup_error:
+        master_debug = f"STARTUP PANIC TRACE:\n{startup_error}"
 
     try:
         for frame_group in media_arrays:
