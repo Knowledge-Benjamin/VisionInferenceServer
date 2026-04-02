@@ -217,7 +217,7 @@ def _process_media_payloads(urls: List[str], b64s: List[str]) -> List[List[Image
 
     return media_arrays
 
-def _calculate_synthetic_probability(images: List[Image.Image]) -> float:
+def _calculate_synthetic_probability(images: List[Image.Image]) -> tuple[float, Optional[str]]:
     """
     Executes the Dual-ViT model array across a temporal sequence of frames.
     Averages probabilities per-frame to normalize motion blur noise, then aggregates the
@@ -225,7 +225,7 @@ def _calculate_synthetic_probability(images: List[Image.Image]) -> float:
     """
     if not images:
         logger.warning("_calculate_synthetic_probability called with empty images list.")
-        return 0.0
+        return 0.0, "Empty images array"
 
     try:
         synth_outputs = []
@@ -291,18 +291,20 @@ def _calculate_synthetic_probability(images: List[Image.Image]) -> float:
         avg_df = sum(df_outputs) / len(df_outputs)
         final = max(avg_synth, avg_df)
         logger.info(f"[DIAG] avg_synth={avg_synth:.4f}  avg_df={avg_df:.4f}  final={final:.4f}")
-        return final
+        return final, None
 
     except Exception as e:
         import traceback
-        logger.error(f"Classifier Array Panicked: {e}\n{traceback.format_exc()}")
-        return 0.0
+        err_msg = traceback.format_exc()
+        logger.error(f"Classifier Array Panicked: {e}\n{err_msg}")
+        return 0.0, err_msg
 
 
-def _embed_matrix(media_arrays: List[List[Image.Image]]) -> tuple[List[List[float]], List[str], List[float]]:
+def _embed_matrix(media_arrays: List[List[Image.Image]]) -> tuple[List[List[float]], List[str], List[float], Optional[str]]:
     master_vectors = []
     master_phashes = []
     master_synth_probs = []
+    master_debug = None
 
     try:
         for frame_group in media_arrays:
@@ -310,9 +312,11 @@ def _embed_matrix(media_arrays: List[List[Image.Image]]) -> tuple[List[List[floa
             center_frame = frame_group[len(frame_group) // 2]
             master_phashes.append(str(imagehash.phash(center_frame)))
 
-            # 2. Synthetic Probability — always a plain float now
-            synth_score = _calculate_synthetic_probability(frame_group)
+            # 2. Synthetic Probability — trace exceptions dynamically
+            synth_score, dbg = _calculate_synthetic_probability(frame_group)
             master_synth_probs.append(round(float(synth_score), 4))
+            if dbg:
+                master_debug = dbg
 
             # 3. SigLIP Mathematical Embedding Matrix
             inputs = models['siglip_proc'](images=frame_group, return_tensors="pt").to(DEVICE)
@@ -325,7 +329,7 @@ def _embed_matrix(media_arrays: List[List[Image.Image]]) -> tuple[List[List[floa
             avg_vector = avg_vector / avg_vector.norm(dim=-1, keepdim=True)
             master_vectors.append(avg_vector[0].cpu().tolist())
 
-        return master_vectors, master_phashes, master_synth_probs
+        return master_vectors, master_phashes, master_synth_probs, master_debug
 
     except Exception as e:
         import traceback
@@ -359,9 +363,9 @@ async def embed_media(request: VisionEmbedRequest, _: str = Depends(verify_api_k
         media_arrays = await asyncio.to_thread(_process_media_payloads, request.image_urls, request.image_base64)
         
         # Complex Matrix GPU/CPU Algebra execution
-        vectors, phashes, synthetics = await asyncio.to_thread(_embed_matrix, media_arrays)
+        vectors, phashes, synthetics, dbg_msg = await asyncio.to_thread(_embed_matrix, media_arrays)
         
-        return VisionEmbedResponse(embeddings=vectors, phashes=phashes, synthetic_prob=synthetics)
+        return VisionEmbedResponse(embeddings=vectors, phashes=phashes, synthetic_prob=synthetics, debug=dbg_msg)
         
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
