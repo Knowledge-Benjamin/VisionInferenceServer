@@ -290,8 +290,11 @@ def _calculate_synthetic_probability(images: List[Image.Image]) -> tuple[float, 
         avg_synth = sum(synth_outputs) / len(synth_outputs)
         avg_df = sum(df_outputs) / len(df_outputs)
         final = max(avg_synth, avg_df)
-        logger.info(f"[DIAG] avg_synth={avg_synth:.4f}  avg_df={avg_df:.4f}  final={final:.4f}")
-        return final, None
+        
+        diag_logs = f"synth_id2label: {synth_id2label} | df_id2label: {df_id2label} | artificial_idx: {artificial_idx} | fake_idx: {fake_idx} | avg_synth: {avg_synth:.4f} | avg_df: {avg_df:.4f}"
+        logger.info(f"[DIAG] {diag_logs}")
+        
+        return final, diag_logs
 
     except Exception as e:
         import traceback
