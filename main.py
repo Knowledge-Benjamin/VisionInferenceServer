@@ -109,6 +109,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+@app.get("/health")
+def read_health():
+    return {"status": "ok", "startup_error": startup_error, "models_loaded": list(models.keys())}
+
 def _download_video_stream(url: str) -> str:
     """Securely buffer arbitrary video URLs to ephemeral storage. Halts at 50MB."""
     logger.info(f"Opening secure temporal video stream for: {url}")
@@ -327,7 +331,7 @@ def _embed_matrix(media_arrays: List[List[Image.Image]]) -> tuple[List[List[floa
             synth_score, dbg = _calculate_synthetic_probability(frame_group)
             master_synth_probs.append(round(float(synth_score), 4))
             if dbg:
-                master_debug = dbg
+                master_debug = f"{master_debug}\n---\n{dbg}" if master_debug else dbg
 
             # 3. SigLIP Mathematical Embedding Matrix
             inputs = models['siglip_proc'](images=frame_group, return_tensors="pt").to(DEVICE)
