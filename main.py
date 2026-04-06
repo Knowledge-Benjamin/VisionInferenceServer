@@ -4,16 +4,15 @@ World-Class Vision Embedding & Deepfake Detection Server
 
 An enterprise-grade FastAPI server for generating unified Vision-Language embeddings 
 using `google/siglip-base-patch16-224` while simultaneously evaluating Media 
-through a Dual-ViT Deepfake Ensemble architecture.
+through a Tri-State SigLIP2 Deepfake Classifier.
 
 Features:
 - `curl_cffi` Chrome TLS/JA3 impersonation to shatter Datadome/Cloudflare 403 blocks
 - Intelligent Temporal Video Splicing (`opencv`) to extract 3 chronological keyframes
 - Magic-Byte Sniffing (`filetype`) to map raw bitstreams, defending against extension spoofing
 - Ephemeral `/tmp/` Buffers to neutralize OOM DDoS vectors from payload over-sizing
-- Dual AI Classifier Array:
-   1) Midjourney & Neural Style CNN (`umm-maybe/AI-image-detector`)
-   2) Human Forgery & FaceSwap CNN (`dima806/deepfake_vs_real_image_detection`)
+- Tri-State Classifier (`prithivMLmods/AI-vs-Deepfake-vs-Real-Siglip2`):
+   Unified P(AI) + P(Deepfake) synthetic probability — covers FLUX, Midjourney, and FaceSwap
 - Concurrent CPU-GPU async pipeline mapping (Base64/URL parsing -> Hash -> Vector)
 """
 
@@ -98,7 +97,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Enterprise Vision Inference Array",
-    description="Mathematical media dissection using SigLIP semantics and Dual-ViT Temporal Deepfake Detection.",
+    description="Mathematical media dissection using SigLIP semantics and Tri-State Deepfake Detection.",
     version=VERSION,
     lifespan=lifespan
 )
@@ -331,7 +330,7 @@ async def wait_for_models():
 
 @app.post("/embed_media", response_model=VisionEmbedResponse)
 async def embed_media(request: VisionEmbedRequest, _: str = Depends(verify_api_key)):
-    if 'siglip' not in models:
+    if 'siglip' not in models or 's2_tri' not in models:
         logger.info("Suspending request to wait for PyTorch array memory completion...")
         ready = await wait_for_models()
         if not ready:
