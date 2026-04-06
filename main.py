@@ -40,8 +40,7 @@ from transformers import AutoProcessor, AutoModel, AutoImageProcessor, AutoModel
 
 # Model configuration
 SIGLIP_MODEL = "google/siglip-base-patch16-224"
-SYNTH_MODEL = "umm-maybe/AI-image-detector"
-DF_MODEL = "dima806/deepfake_vs_real_image_detection"
+S2_TRI_MODEL = "prithivMLmods/AI-vs-Deepfake-vs-Real-Siglip2"
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 API_KEY = os.getenv("VISION_API_KEY", "default-key-change-in-production")
@@ -78,17 +77,12 @@ def _load_models_sync():
         models['siglip'] = AutoModel.from_pretrained(SIGLIP_MODEL).to(DEVICE)
         models['siglip'].eval()
         
-        # Load the Synthetic Scene ViT
-        models['synth_proc'] = AutoImageProcessor.from_pretrained(SYNTH_MODEL)
-        models['synth'] = AutoModelForImageClassification.from_pretrained(SYNTH_MODEL).to(DEVICE)
-        models['synth'].eval()
+        # Load the Tri-State SigLIP Vision Classifier 
+        models['s2_tri_proc'] = AutoImageProcessor.from_pretrained(S2_TRI_MODEL)
+        models['s2_tri'] = AutoModelForImageClassification.from_pretrained(S2_TRI_MODEL).to(DEVICE)
+        models['s2_tri'].eval()
 
-        # Load the Human Face Forgery ViT
-        models['df_proc'] = AutoImageProcessor.from_pretrained(DF_MODEL)
-        models['df'] = AutoModelForImageClassification.from_pretrained(DF_MODEL).to(DEVICE)
-        models['df'].eval()
-
-        logger.success("Triple-Transformer Array safely active.")
+        logger.success("Dual-Transformer Array safely active.")
     except Exception as e:
         import traceback
         startup_error = traceback.format_exc()
@@ -228,79 +222,54 @@ def _process_media_payloads(urls: List[str], b64s: List[str]) -> List[List[Image
 
 def _calculate_synthetic_probability(images: List[Image.Image]) -> tuple[float, Optional[str]]:
     """
-    Executes the Dual-ViT model array across a temporal sequence of frames.
+    Executes the Tri-State model array across a temporal sequence of frames.
     Averages probabilities per-frame to normalize motion blur noise, then aggregates the
-    maximum synthetic hit.
+    sum of AI and Deepfake probabilities.
     """
     if not images:
         logger.warning("_calculate_synthetic_probability called with empty images list.")
         return 0.0, "Empty images array"
 
     try:
-        synth_outputs = []
-        df_outputs = []
+        synthetic_probs = []
 
-        # Log the actual label maps so Cloud Run logs expose any label-key mismatches
-        synth_id2label = models['synth'].config.id2label
-        df_id2label = models['df'].config.id2label
-        logger.info(f"[DIAG] synth id2label: {synth_id2label}")
-        logger.info(f"[DIAG] df   id2label: {df_id2label}")
+        # Log the actual label map
+        tri_id2label = models['s2_tri'].config.id2label
+        logger.info(f"[DIAG] tri_state id2label: {tri_id2label}")
 
-        # Find the index corresponding to the AI/synthetic class
-        artificial_idx = None
-        for k, v in synth_id2label.items():
-            if 'artificial' in str(v).lower() or 'fake' in str(v).lower() or 'ai' in str(v).lower():
-                artificial_idx = int(k)
-                break
-        if artificial_idx is None:
-            # Fallback: pick whichever single label is NOT 'real' or 'human'
-            for k, v in synth_id2label.items():
-                if 'real' not in str(v).lower() and 'human' not in str(v).lower():
-                    artificial_idx = int(k)
-                    break
-        if artificial_idx is None:
-            artificial_idx = 1  # last-resort index
-        logger.info(f"[DIAG] artificial_idx resolved to {artificial_idx} = {synth_id2label.get(artificial_idx)}")
-
-        # Find the index corresponding to the Fake class
-        fake_idx = None
-        for k, v in df_id2label.items():
-            if 'fake' in str(v).lower() or 'forgery' in str(v).lower() or 'artificial' in str(v).lower():
-                fake_idx = int(k)
-                break
-        if fake_idx is None:
-            for k, v in df_id2label.items():
-                if 'real' not in str(v).lower() and 'human' not in str(v).lower():
-                    fake_idx = int(k)
-                    break
-        if fake_idx is None:
-            fake_idx = 1
-        logger.info(f"[DIAG] fake_idx resolved to {fake_idx} = {df_id2label.get(fake_idx)}")
+        # The mapping is strictly {'0': 'AI', '1': 'Deepfake', '2': 'Real'}
+        # We find indices dynamically just in case config keys change from string to int
+        ai_idx = None
+        df_idx = None
+        for k, v in tri_id2label.items():
+            if 'ai' in str(v).lower():
+                ai_idx = int(k)
+            elif 'deepfake' in str(v).lower():
+                df_idx = int(k)
+        
+        # Fallbacks to known indices if regex fails
+        if ai_idx is None: ai_idx = 0
+        if df_idx is None: df_idx = 1
 
         with torch.no_grad():
             for img in images:
-                # 1. Evaluate Synthetic Origins
-                raw_synth_inputs = models['synth_proc'](images=img, return_tensors="pt")
-                synth_inputs = {k: v.to(DEVICE) for k, v in raw_synth_inputs.items()}
-                s_logits = models['synth'](**synth_inputs).logits
-                s_probs = torch.nn.functional.softmax(s_logits, dim=-1)
-                logger.info(f"[DIAG] synth full probs: {s_probs[0].tolist()}")
+                # 1. Evaluate Unified Matrix
+                raw_inputs = models['s2_tri_proc'](images=img, return_tensors="pt")
+                inputs = {k: v.to(DEVICE) for k, v in raw_inputs.items()}
+                logits = models['s2_tri'](**inputs).logits
+                probs = torch.nn.functional.softmax(logits, dim=-1)[0]
+                
+                logger.info(f"[DIAG] tri_state full probs: {probs.tolist()}")
 
-                # 2. Evaluate Face Forgeries
-                raw_df_inputs = models['df_proc'](images=img, return_tensors="pt")
-                df_inputs = {k: v.to(DEVICE) for k, v in raw_df_inputs.items()}
-                d_logits = models['df'](**df_inputs).logits
-                d_probs = torch.nn.functional.softmax(d_logits, dim=-1)
-                logger.info(f"[DIAG] df   full probs: {d_probs[0].tolist()}")
+                # AI and Deepfake conceptually represent synthetic alterations
+                # Probability = P(AI) + P(Deepfake)
+                frame_prob = probs[ai_idx].item() + probs[df_idx].item()
+                synthetic_probs.append(frame_prob)
 
-                synth_outputs.append(s_probs[0][artificial_idx].item())
-                df_outputs.append(d_probs[0][fake_idx].item())
-
-        avg_synth = sum(synth_outputs) / len(synth_outputs)
-        avg_df = sum(df_outputs) / len(df_outputs)
-        final = max(avg_synth, avg_df)
+        avg_synthetic = sum(synthetic_probs) / len(synthetic_probs)
+        final = min(1.0, float(avg_synthetic))  # Clamp at 1.0 safely
         
-        diag_logs = f"synth_id2label: {synth_id2label} | df_id2label: {df_id2label} | artificial_idx: {artificial_idx} | fake_idx: {fake_idx} | avg_synth: {avg_synth:.4f} | avg_df: {avg_df:.4f}"
+        diag_logs = f"tri_id2label: {tri_id2label} | ai_idx: {ai_idx} | df_idx: {df_idx} | avg_synthetic: {final:.4f}"
         logger.info(f"[DIAG] {diag_logs}")
         
         return final, diag_logs
@@ -355,7 +324,7 @@ def _embed_matrix(media_arrays: List[List[Image.Image]]) -> tuple[List[List[floa
 async def wait_for_models():
     """Asynchronously hold the HTTP connection open while the background thread completes."""
     for _ in range(120): # Extend wait up to 120s for slow CPU bounds
-        if 'siglip' in models and 'synth' in models:
+        if 'siglip' in models and 's2_tri' in models:
             return True
         await asyncio.sleep(1.0)
     return False
